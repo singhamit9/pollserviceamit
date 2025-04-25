@@ -17,7 +17,7 @@ if (cluster.isMaster) {
   app.use(cors());
 
   const redis = new Redis({
-    host: 'your-redis-endpoint.amazonaws.com',
+    host: 'nexttoppers-serverless-pa60px.serverless.aps1.cache.amazonaws.com:6379',
     port: 6379,
     tls: {}
   });
