@@ -6,7 +6,7 @@ const cluster = require('cluster');
 const os = require('os');
 
 const numCPUs = os.cpus().length;
-const EMQX_HOST = process.env.EMQX_HOST || 'your-emqx-endpoint.com';
+const EMQX_HOST = process.env.EMQX_HOST || 'MQTT-chat-7c6cdb28f96eeaf6.elb.ap-south-1.amazonaws.com';
 
 if (cluster.isMaster) {
   for (let i = 0; i < numCPUs; i++) cluster.fork();
