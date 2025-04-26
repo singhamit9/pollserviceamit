@@ -6,142 +6,141 @@ const cluster = require('cluster');
 const os = require('os');
 
 const numCPUs = os.cpus().length;
-const EMQX_HOST = process.env.EMQX_HOST || 'MQTT-chat-7c6cdb28f96eeaf6.elb.ap-south-1.amazonaws.com';
+const EMQX_HOST = 'MQTT-chat-7c6cdb28f96eeaf6.elb.ap-south-1.amazonaws.com';
 
 if (cluster.isMaster) {
-  for (let i = 0; i < numCPUs; i++) cluster.fork();
-  cluster.on('exit', (_, __, ___) => cluster.fork());
+  console.log(`Master process running with PID: ${process.pid}`);
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`Worker ${worker.process.pid} died. Restarting...`);
+    cluster.fork();
+  });
 } else {
   const app = express();
   app.use(express.json());
   app.use(cors());
 
   const redis = new Redis({
-    host: 'nexttoppers-serverless-pa60px.serverless.aps1.cache.amazonaws.com:6379',
+    host: 'nexttoppers-serverless-pa60px.serverless.aps1.cache.amazonaws.com',
     port: 6379,
     tls: {}
   });
 
-  redis.ping().then(r => console.log('✅ Redis connected')).catch(err => {
-    console.error('❌ Redis failed:', err);
-    process.exit(1);
-  });
-
-  const mqttClient = mqtt.connect(`mqtt://${EMQX_HOST}:1883`, {
-    clientId: 'PollService-' + Math.random().toString(16).substr(2, 8),
-    clean: true,
-    reconnectPeriod: 1000
-  });
-
-  mqttClient.on('connect', () => console.log('✅ Connected to EMQX (TCP)'));
-  mqttClient.on('error', err => console.error('❌ MQTT Error:', err));
-
-  app.get('/poll/health', (req, res) => res.status(200).send('OK'));
-
-  app.post('/poll/:id/initiate', async (req, res) => {
-    const pollId = req.params.id;
-    const { classId, question, options, correct_option, duration } = req.body;
-
-    if (!question || !options || !correct_option || !classId || !duration)
-      return res.status(400).json({ error: 'Missing fields' });
-
-    await redis.hmset(`Poll:${pollId}:meta`, {
-      question,
-      options: JSON.stringify(options),
-      correct_option,
-      start_time: Date.now(),
-      duration
+  redis.ping()
+    .then(() => console.log('✅ Redis connected'))
+    .catch(err => {
+      console.error('❌ Redis connection failed:', err);
+      process.exit(1);
     });
-    redis.expire(`Poll:${pollId}:meta`, 3600);
 
-    mqttClient.publish(`class/${classId}/polls`, JSON.stringify({
-      poll_id: pollId, question, options, duration
-    }), { qos: 0, retain: false });
+  app.post('/managePoll', async (req, res) => {
+    const { type, data } = req.body;
+    if (!type || !data) return res.status(400).json({ error: 'Invalid payload' });
 
-    setTimeout(() => finalizePoll(pollId), duration * 1000);
-    res.json({ success: true, message: 'Poll published' });
-  });
-
-  app.post('/poll/:id/vote', async (req, res) => {
-    const pollId = req.params.id;
-    const { userId, selectedOption, responseTime } = req.body;
-    const userKey = `Poll:${pollId}:user:${userId}`;
-    const answeredSet = `Poll:${pollId}:users_answered`;
-    const pollMeta = await redis.hgetall(`Poll:${pollId}:meta`);
-
-    if (!pollMeta.correct_option) return res.status(404).send('Poll not found');
-
-    const isCorrect = selectedOption === pollMeta.correct_option;
-    const added = await redis.sadd(answeredSet, userId);
-    if (added === 0) return res.status(200).send('Already answered');
-
-    const pipeline = redis.pipeline();
-    pipeline.hincrby(`Poll:${pollId}:votes`, selectedOption, 1);
-    pipeline.hmset(userKey, {
-      selected_option: selectedOption,
-      is_correct: isCorrect,
-      response_time: responseTime
-    });
-    if (isCorrect) pipeline.zadd(`Poll:${pollId}:leaderboard`, responseTime, userId);
-    pipeline.expire(userKey, 3600);
-    await pipeline.exec();
-
-    res.send('Vote recorded');
-  });
-
-  async function finalizePoll(pollId) {
-    const top10 = await redis.zrange(`Poll:${pollId}:leaderboard`, 0, 9, 'WITHSCORES');
-    const leaderboard = [];
-    for (let i = 0; i < top10.length; i += 2)
-      leaderboard.push({ userId: top10[i], time: parseFloat(top10[i + 1]) });
-
-    await redis.set(`Poll:${pollId}:final_leaderboard`, JSON.stringify(leaderboard), 'EX', 3600);
-
-    const votes = await redis.hgetall(`Poll:${pollId}:votes`);
-    const meta = await redis.hget(`Poll:${pollId}:meta`, 'correct_option');
-
-    await redis.set(`Poll:${pollId}:final_result`, JSON.stringify({
-      votes,
-      correct_option: meta
-    }), 'EX', 3600);
-
-    console.log(`✅ Poll ${pollId} finalized`);
-  }
-
-  app.post('/poll/:id/finalize', async (req, res) => {
     try {
-      await finalizePoll(req.params.id);
-      res.json({ success: true });
+      switch (type) {
+        case 'CREATE_POLL':
+          const pollId = data.poll_id;
+          const setting_node = data.setting_node;
+          const duration = data.validity;
+
+          await redis.hmset(`Poll:${pollId}:meta`, {
+            question: data.question,
+            options: JSON.stringify(data.options),
+            correct_option: data.correct_option,
+            start_time: Date.now(),
+            duration
+          });
+          redis.expire(`Poll:${pollId}:meta`, 3600);
+
+          const payload = {
+            poll_id: pollId,
+            question: data.question,
+            options: data.options,
+            duration
+          };
+
+          const mqttClient = mqtt.connect(`mqtt://${EMQX_HOST}:1883`, {
+            clientId: 'PollService-' + Math.random().toString(16).substr(2, 8),
+            clean: true,
+            reconnectPeriod: 1000
+          });
+
+          mqttClient.on('connect', () => {
+            mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 2, retain: false }, (err) => {
+              if (err) console.error('❌ Error publishing:', err);
+              mqttClient.end();
+            });
+          });
+
+          setTimeout(() => finalizePoll(pollId), duration * 1000);
+          res.json({ success: true });
+          break;
+
+        case 'UPDATE_POLL':
+          const { user_id, selected_option, poll_id, response_time } = data;
+          const userKey = `Poll:${poll_id}:user:${user_id}`;
+          const answeredSet = `Poll:${poll_id}:users_answered`;
+          const pollMeta = await redis.hgetall(`Poll:${poll_id}:meta`);
+
+          if (!pollMeta.correct_option) return res.status(404).send('Poll not found');
+
+          const isCorrect = selected_option === pollMeta.correct_option;
+          const added = await redis.sadd(answeredSet, user_id);
+          if (added === 0) return res.status(200).send('Already answered');
+
+          const pipeline = redis.pipeline();
+          pipeline.hincrby(`Poll:${poll_id}:votes`, selected_option, 1);
+          pipeline.hmset(userKey, {
+            selected_option,
+            is_correct: isCorrect,
+            response_time
+          });
+          if (isCorrect) pipeline.zadd(`Poll:${poll_id}:leaderboard`, response_time, user_id);
+          pipeline.expire(userKey, 3600);
+          await pipeline.exec();
+
+          res.json({ success: true });
+          break;
+
+        case 'GET_POLL':
+          const pollData = await redis.hgetall(`Poll:${data.poll_id}:meta`);
+          if (!pollData) return res.status(404).send('Poll not found');
+          res.json({ poll: pollData });
+          break;
+
+        case 'GET_LEADERBOARD':
+        case 'GET_LEADERBOARD_VIDEOWISE':
+          const leaderboardData = await redis.get(`Poll:${data.poll_id}:final_leaderboard`);
+          if (!leaderboardData) return res.status(404).json({ error: 'Leaderboard not ready' });
+          res.json({ leaderboard: JSON.parse(leaderboardData) });
+          break;
+
+        default:
+          res.status(400).json({ error: 'Unknown type' });
+      }
     } catch (err) {
-      console.error('❌ Finalization error:', err);
-      res.status(500).send('Failed to finalize poll');
+      console.error('❌ Error handling managePoll:', err);
+      res.status(500).send('Internal error');
     }
   });
 
-  app.get('/poll/:id/result', async (req, res) => {
-    const pollId = req.params.id;
-    const { userId } = req.query;
+  async function finalizePoll(pollId) {
+    try {
+      const top10 = await redis.zrange(`Poll:${pollId}:leaderboard`, 0, 9, 'WITHSCORES');
+      const leaderboard = [];
+      for (let i = 0; i < top10.length; i += 2) {
+        leaderboard.push({ user_id: top10[i], time: parseFloat(top10[i + 1]) });
+      }
+      await redis.set(`Poll:${pollId}:final_leaderboard`, JSON.stringify(leaderboard), 'EX', 3600);
+      console.log(`✅ Poll ${pollId} finalized.`);
+    } catch (err) {
+      console.error(`❌ Error finalizing poll ${pollId}:`, err);
+    }
+  }
 
-    const data = await redis.get(`Poll:${pollId}:final_result`);
-    const user = await redis.hgetall(`Poll:${pollId}:user:${userId}`);
-
-    if (!data) return res.status(404).send('Result not ready');
-
-    const result = JSON.parse(data);
-    res.json({
-      votes: result.votes,
-      correct_option: result.correct_option,
-      user_selection: user.selected_option,
-      is_correct: user.is_correct === 'true'
-    });
-  });
-
-  app.get('/poll/:id/leaderboard', async (req, res) => {
-    const pollId = req.params.id;
-    const data = await redis.get(`Poll:${pollId}:final_leaderboard`);
-    if (!data) return res.status(404).json({ error: 'Leaderboard not ready' });
-    res.json({ leaderboard: JSON.parse(data) });
-  });
-
-  app.listen(8080, () => console.log(`Worker ${process.pid} running`));
+  const PORT = process.env.PORT || 8080;
+  app.listen(PORT, () => console.log(`Worker ${process.pid} running on port ${PORT}`));
 }
