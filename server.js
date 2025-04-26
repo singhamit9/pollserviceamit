@@ -22,6 +22,11 @@ if (cluster.isMaster) {
   app.use(express.json());
   app.use(cors());
 
+  // ALB Health Check Route
+  app.get('/poll/health', (req, res) => {
+    res.status(200).send('OK');
+  });
+
   const redis = new Redis({
     host: 'nexttoppers-serverless-pa60px.serverless.aps1.cache.amazonaws.com',
     port: 6379,
