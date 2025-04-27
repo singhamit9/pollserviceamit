@@ -77,7 +77,7 @@ if (cluster.isMaster) {
 
     try {
       switch (type) {
-        case 'CREATE_POLL':
+        case 'CREATE_POLL': {
           const pollIdCreate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const setting_node = data?.setting_node || req.body.setting_node;
           const duration = parseInt(data?.validity || req.body.validity) || 60;
@@ -114,6 +114,9 @@ if (cluster.isMaster) {
             return res.status(500).json({ error: 'MQTT broker not connected' });
           }
 
+          console.log(`📡 Publishing Poll to MQTT:
+Topic = ${setting_node}
+Payload =`, payload);
           mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 1, retain: true }, (err) => {
             if (err) {
               console.error('❌ Error publishing poll to MQTT:', err);
@@ -125,8 +128,9 @@ if (cluster.isMaster) {
           setTimeout(() => finalizePoll(pollIdCreate), duration * 1000);
           res.json({ success: true });
           break;
+        }
 
-        case 'UPDATE_POLL':
+        case 'UPDATE_POLL': {
           const pollIdUpdate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const userIdUpdate = data?.user_id || req.body.user_id;
           const selectedOption = data?.attempted || req.body.attempted;
@@ -155,8 +159,9 @@ if (cluster.isMaster) {
 
           res.json({ success: true });
           break;
+        }
 
-        case 'GET_POLL':
+        case 'GET_POLL': {
           const pollIdGet = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const userIdGet = data?.user_id || req.body.user_id;
           const pollData = await redis.hgetall(`Poll:${pollIdGet}:meta`);
@@ -181,14 +186,16 @@ if (cluster.isMaster) {
 
           res.json({ poll: pollData, my_answer: myAnswer });
           break;
+        }
 
         case 'GET_LEADERBOARD':
-        case 'GET_LEADERBOARD_VIDEOWISE':
+        case 'GET_LEADERBOARD_VIDEOWISE': {
           const pollIdLeader = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const leaderboardData = await redis.get(`Poll:${pollIdLeader}:final_leaderboard`);
           if (!leaderboardData) return res.status(404).json({ error: 'Leaderboard not ready' });
           res.json({ leaderboard: JSON.parse(leaderboardData) });
           break;
+        }
 
         default:
           res.status(400).json({ error: 'Unknown type' });
@@ -201,6 +208,10 @@ if (cluster.isMaster) {
 
   async function finalizePoll(pollId) {
     try {
+      if (!pollId) {
+        console.error('❌ finalizePoll called without valid pollId');
+        return;
+      }
       const top10 = await redis.zrange(`Poll:${pollId}:leaderboard`, 0, 9, 'WITHSCORES');
       const leaderboard = [];
       for (let i = 0; i < top10.length; i += 2) {
