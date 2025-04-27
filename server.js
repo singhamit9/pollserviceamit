@@ -68,7 +68,7 @@ if (cluster.isMaster) {
           });
 
           mqttClient.on('connect', () => {
-            mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 2, retain: false }, (err) => {
+            mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 1, retain: true }, (err) => {
               if (err) console.error('❌ Error publishing:', err);
               mqttClient.end();
             });
@@ -101,7 +101,7 @@ if (cluster.isMaster) {
             is_correct: isCorrect,
             response_time: responseTime
           });
-          if (isCorrect) pipeline.zadd(`Poll:${pollIdUpdate}:leaderboard`, response_time, userIdUpdate);
+          if (isCorrect) pipeline.zadd(`Poll:${pollIdUpdate}:leaderboard`, responseTime, userIdUpdate);
           pipeline.expire(userKey, 3600);
           await pipeline.exec();
 
@@ -110,9 +110,28 @@ if (cluster.isMaster) {
 
         case 'GET_POLL':
           const pollIdGet = data?.poll_id || req.body.poll_id;
+          const userIdGet = data?.user_id || req.body.user_id;
           const pollData = await redis.hgetall(`Poll:${pollIdGet}:meta`);
           if (!pollData) return res.status(404).send('Poll not found');
-          res.json({ poll: pollData });
+
+          if (pollData.options) {
+            try {
+              pollData.options = JSON.parse(pollData.options);
+            } catch (err) {
+              console.error('Error parsing options JSON:', err);
+              pollData.options = [];
+            }
+          }
+
+          let myAnswer = null;
+          if (userIdGet) {
+            const userVote = await redis.hgetall(`Poll:${pollIdGet}:user:${userIdGet}`);
+            if (userVote && userVote.selected_option) {
+              myAnswer = userVote.selected_option;
+            }
+          }
+
+          res.json({ poll: pollData, my_answer: myAnswer });
           break;
 
         case 'GET_LEADERBOARD':
