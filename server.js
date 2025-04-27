@@ -29,9 +29,46 @@ if (cluster.isMaster) {
     tls: {}
   });
 
-  redis.ping().then(() => console.log('✅ Redis connected')).catch(err => {
-    console.error('❌ Redis connection failed:', err);
-    process.exit(1);
+  redis.ping()
+    .then(() => console.log('✅ Redis connected'))
+    .catch(err => {
+      console.error('❌ Redis connection failed:', err);
+      process.exit(1);
+    });
+
+  let isMqttConnected = false;
+  const mqttClient = mqtt.connect(`mqtt://${EMQX_HOST}:1883`, {
+    clientId: 'PollService-' + Math.random().toString(16).substr(2, 8),
+    clean: true,
+    reconnectPeriod: 1000
+  });
+
+  mqttClient.on('connect', () => {
+    console.log('✅ Connected to MQTT broker (EMQX)');
+    isMqttConnected = true;
+  });
+
+  mqttClient.on('error', (err) => {
+    console.error('❌ MQTT connection error:', err);
+    isMqttConnected = false;
+  });
+
+  mqttClient.on('close', () => {
+    console.warn('⚠️ MQTT connection closed');
+    isMqttConnected = false;
+  });
+
+  mqttClient.on('offline', () => {
+    console.warn('⚠️ MQTT client offline');
+    isMqttConnected = false;
+  });
+
+  app.get('/poll/mqtt/health', (req, res) => {
+    if (isMqttConnected) {
+      res.status(200).send('✅ MQTT connected');
+    } else {
+      res.status(500).send('❌ MQTT not connected');
+    }
   });
 
   app.post('/managePoll', async (req, res) => {
@@ -61,17 +98,17 @@ if (cluster.isMaster) {
             duration
           };
 
-          const mqttClient = mqtt.connect(`mqtt://${EMQX_HOST}:1883`, {
-            clientId: 'PollService-' + Math.random().toString(16).substr(2, 8),
-            clean: true,
-            reconnectPeriod: 1000
-          });
+          if (!isMqttConnected) {
+            console.error('❌ MQTT not connected, cannot publish poll');
+            return res.status(500).json({ error: 'MQTT broker not connected' });
+          }
 
-          mqttClient.on('connect', () => {
-            mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 1, retain: true }, (err) => {
-              if (err) console.error('❌ Error publishing:', err);
-              mqttClient.end();
-            });
+          mqttClient.publish(setting_node, JSON.stringify(payload), { qos: 1, retain: true }, (err) => {
+            if (err) {
+              console.error('❌ Error publishing poll to MQTT:', err);
+            } else {
+              console.log('📡 Poll published successfully via MQTT');
+            }
           });
 
           setTimeout(() => finalizePoll(pollIdCreate), duration * 1000);
