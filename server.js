@@ -78,14 +78,25 @@ if (cluster.isMaster) {
     try {
       switch (type) {
         case 'CREATE_POLL':
-          const pollIdCreate = data?.poll_id || req.body.poll_id;
+          const pollIdCreate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const setting_node = data?.setting_node || req.body.setting_node;
-          const duration = data?.validity || req.body.validity;
+          const duration = parseInt(data?.validity || req.body.validity) || 60;
+
+          const options = {};
+          if (data?.option_1 || req.body?.option_1) options["1"] = data?.option_1 || req.body?.option_1;
+          if (data?.option_2 || req.body?.option_2) options["2"] = data?.option_2 || req.body?.option_2;
+          if (data?.option_3 || req.body?.option_3) options["3"] = data?.option_3 || req.body?.option_3;
+          if (data?.option_4 || req.body?.option_4) options["4"] = data?.option_4 || req.body?.option_4;
+          if (data?.option_5 || req.body?.option_5) options["5"] = data?.option_5 || req.body?.option_5;
+          if (data?.option_6 || req.body?.option_6) options["6"] = data?.option_6 || req.body?.option_6;
+
+          const question = data?.question || req.body.question;
+          const correct_option = data?.answer || req.body.answer;
 
           await redis.hmset(`Poll:${pollIdCreate}:meta`, {
-            question: data?.question || req.body.question,
-            options: JSON.stringify(data?.options || req.body.options),
-            correct_option: data?.correct_option || req.body.correct_option,
+            question,
+            options: JSON.stringify(options),
+            correct_option,
             start_time: Date.now(),
             duration
           });
@@ -93,8 +104,8 @@ if (cluster.isMaster) {
 
           const payload = {
             poll_id: pollIdCreate,
-            question: data?.question || req.body.question,
-            options: data?.options || req.body.options,
+            question,
+            options,
             duration
           };
 
@@ -116,7 +127,7 @@ if (cluster.isMaster) {
           break;
 
         case 'UPDATE_POLL':
-          const pollIdUpdate = data?.poll_id || req.body.poll_id;
+          const pollIdUpdate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const userIdUpdate = data?.user_id || req.body.user_id;
           const selectedOption = data?.attempted || req.body.attempted;
           const responseTime = data?.timeleft || req.body.timeleft;
@@ -146,7 +157,7 @@ if (cluster.isMaster) {
           break;
 
         case 'GET_POLL':
-          const pollIdGet = data?.poll_id || req.body.poll_id;
+          const pollIdGet = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const userIdGet = data?.user_id || req.body.user_id;
           const pollData = await redis.hgetall(`Poll:${pollIdGet}:meta`);
           if (!pollData) return res.status(404).send('Poll not found');
@@ -173,7 +184,7 @@ if (cluster.isMaster) {
 
         case 'GET_LEADERBOARD':
         case 'GET_LEADERBOARD_VIDEOWISE':
-          const pollIdLeader = data?.poll_id || req.body.poll_id;
+          const pollIdLeader = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
           const leaderboardData = await redis.get(`Poll:${pollIdLeader}:final_leaderboard`);
           if (!leaderboardData) return res.status(404).json({ error: 'Leaderboard not ready' });
           res.json({ leaderboard: JSON.parse(leaderboardData) });
