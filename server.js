@@ -57,7 +57,7 @@ if (cluster.isMaster) {
 
   app.post('/managePoll', async (req, res) => {
     const { type, data } = req.body;
-    if (!type) return res.status(400).json({ error: 'Invalid payload' });
+    if (!type) return res.status(400).json({ error: 'Invalid payload: missing type' });
 
     try {
       switch (type) {
@@ -69,7 +69,7 @@ if (cluster.isMaster) {
 
           const createdTime = Math.floor(Date.now() / 1000);
           const validity = parseInt(data.validity || '60');
-          const expiryTime = validity + 300; // 5 minute buffer
+          const expiryTime = validity + 300; // 5 minutes buffer
 
           const options = {
             question: data.question,
@@ -145,12 +145,17 @@ if (cluster.isMaster) {
         }
 
         case 'UPDATE_POLL': {
-          const pollIdUpdate = req.body.poll_id || data.poll_id;
-          const userIdUpdate = req.body.user_id || data.user_id;
-          const selectedOption = req.body.attempted || data.attempted;
-          const responseTime = req.body.timeleft || data.timeleft;
+          if (!data || !data.user_id || !data.poll_id) {
+            return res.status(400).json({ error: 'Missing required fields for UPDATE_POLL' });
+          }
 
-          const expiryTime = 300 + parseInt(req.body.validity || data.validity || '60'); // Use poll validity + 5 min
+          const pollIdUpdate = data.poll_id;
+          const userIdUpdate = data.user_id;
+          const selectedOption = data.attempted;
+          const responseTime = data.timeleft;
+
+          const expiryTime = 300 + parseInt(data.validity || '60'); // Buffer
+
           const userKey = `Poll:${pollIdUpdate}:user:${userIdUpdate}`;
           const answeredSet = `Poll:${pollIdUpdate}:users_answered`;
           const pollMeta = await redis.hgetall(`Poll:${pollIdUpdate}:meta`);
