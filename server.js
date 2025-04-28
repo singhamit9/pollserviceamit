@@ -47,6 +47,10 @@ if (cluster.isMaster) {
   mqttClient.on("close",   () => { console.warn ("⚠️ MQTT closed");   isMqttConnected = false; });
   mqttClient.on("offline", () => { console.warn ("⚠️ MQTT offline");  isMqttConnected = false; });
 
+  app.get("/poll/health", (req, res) => {
+    res.status(200).send("OK");
+  });
+  
   // — Single entrypoint
   app.post("/managePoll", async (req, res) => {
     // 1) unpack & default
