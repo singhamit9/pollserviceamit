@@ -29,12 +29,10 @@ if (cluster.isMaster) {
     tls: {}
   });
 
-  redis.ping()
-    .then(() => console.log('✅ Redis connected'))
-    .catch(err => {
-      console.error('❌ Redis connection failed:', err);
-      process.exit(1);
-    });
+  redis.ping().then(() => console.log('✅ Redis connected')).catch(err => {
+    console.error('❌ Redis connection failed:', err);
+    process.exit(1);
+  });
 
   let isMqttConnected = false;
   const mqttClient = mqtt.connect(`mqtt://${EMQX_HOST}:1883`, {
@@ -63,14 +61,6 @@ if (cluster.isMaster) {
     isMqttConnected = false;
   });
 
-  app.get('/poll/mqtt/health', (req, res) => {
-    if (isMqttConnected) {
-      res.status(200).send('✅ MQTT connected');
-    } else {
-      res.status(500).send('❌ MQTT not connected');
-    }
-  });
-
   app.post('/managePoll', async (req, res) => {
     const { type, data } = req.body;
     if (!type) return res.status(400).json({ error: 'Invalid payload' });
@@ -78,35 +68,59 @@ if (cluster.isMaster) {
     try {
       switch (type) {
         case 'CREATE_POLL': {
-          const pollIdCreate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
-          const setting_node = data?.setting_node || req.body.setting_node;
-          const duration = parseInt(data?.validity || req.body.validity) || 60;
+          const setting_node = req.body.setting_node;
+          const course_id = req.body.course_id || '';
+          const video_id = req.body.video_id || '';
+          const pollIdCreate = req.body.id || (video_id + '' + Date.now());
 
-          const options = {};
-          if (data?.option_1 || req.body?.option_1) options["1"] = data?.option_1 || req.body?.option_1;
-          if (data?.option_2 || req.body?.option_2) options["2"] = data?.option_2 || req.body?.option_2;
-          if (data?.option_3 || req.body?.option_3) options["3"] = data?.option_3 || req.body?.option_3;
-          if (data?.option_4 || req.body?.option_4) options["4"] = data?.option_4 || req.body?.option_4;
-          if (data?.option_5 || req.body?.option_5) options["5"] = data?.option_5 || req.body?.option_5;
-          if (data?.option_6 || req.body?.option_6) options["6"] = data?.option_6 || req.body?.option_6;
-
-          const question = data?.question || req.body.question;
-          const correct_option = data?.answer || req.body.answer;
+          const options = {
+            option_1: data.option_1,
+            option_2: data.option_2,
+            option_3: data.option_3,
+            option_4: data.option_4,
+            option_5: data.option_5,
+            option_6: data.option_6,
+            answer: data.answer,
+            created: Math.floor(Date.now() / 1000),
+            delay: Math.floor(Date.now() / 1000) + 1,
+            validity: data.validity,
+            valid_till: Math.floor(Date.now() / 1000) + parseInt(data.validity || '60'),
+            disable_result: 0,
+            status: '1',
+            video_id: video_id,
+            attempt_1: 0,
+            attempt_2: 0,
+            attempt_3: 0,
+            attempt_4: 0,
+            id: pollIdCreate,
+            firebase_key: pollIdCreate,
+            poll_key: pollIdCreate,
+            poll_id: pollIdCreate
+          };
 
           await redis.hmset(`Poll:${pollIdCreate}:meta`, {
-            question,
+            question: data.question,
             options: JSON.stringify(options),
-            correct_option,
+            correct_option: data.answer,
             start_time: Date.now(),
-            duration
+            duration: data.validity
           });
           redis.expire(`Poll:${pollIdCreate}:meta`, 3600);
 
           const payload = {
             poll_id: pollIdCreate,
-            question,
-            options,
-            duration
+            type: 'poll',
+            date: Math.floor(Date.now() / 1000),
+            is_active: '1',
+            name: req.body.name || 'NT Admin',
+            profile_picture: '',
+            pin: '0',
+            user_id: '',
+            platform: req.body.platform,
+            course_id: course_id,
+            video_id: video_id,
+            id: pollIdCreate,
+            message: options
           };
 
           if (!isMqttConnected) {
@@ -125,75 +139,8 @@ Payload =`, payload);
             }
           });
 
-          setTimeout(() => finalizePoll(pollIdCreate), duration * 1000);
+          setTimeout(() => finalizePoll(pollIdCreate), parseInt(data.validity) * 1000);
           res.json({ success: true });
-          break;
-        }
-
-        case 'UPDATE_POLL': {
-          const pollIdUpdate = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
-          const userIdUpdate = data?.user_id || req.body.user_id;
-          const selectedOption = data?.attempted || req.body.attempted;
-          const responseTime = data?.timeleft || req.body.timeleft;
-
-          const userKey = `Poll:${pollIdUpdate}:user:${userIdUpdate}`;
-          const answeredSet = `Poll:${pollIdUpdate}:users_answered`;
-          const pollMeta = await redis.hgetall(`Poll:${pollIdUpdate}:meta`);
-
-          if (!pollMeta.correct_option) return res.status(404).send('Poll not found');
-
-          const isCorrect = selectedOption === pollMeta.correct_option;
-          const added = await redis.sadd(answeredSet, userIdUpdate);
-          if (added === 0) return res.status(200).send('Already answered');
-
-          const pipeline = redis.pipeline();
-          pipeline.hincrby(`Poll:${pollIdUpdate}:votes`, selectedOption, 1);
-          pipeline.hmset(userKey, {
-            selected_option: selectedOption,
-            is_correct: isCorrect,
-            response_time: responseTime
-          });
-          if (isCorrect) pipeline.zadd(`Poll:${pollIdUpdate}:leaderboard`, responseTime, userIdUpdate);
-          pipeline.expire(userKey, 3600);
-          await pipeline.exec();
-
-          res.json({ success: true });
-          break;
-        }
-
-        case 'GET_POLL': {
-          const pollIdGet = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
-          const userIdGet = data?.user_id || req.body.user_id;
-          const pollData = await redis.hgetall(`Poll:${pollIdGet}:meta`);
-          if (!pollData) return res.status(404).send('Poll not found');
-
-          if (pollData.options) {
-            try {
-              pollData.options = JSON.parse(pollData.options);
-            } catch (err) {
-              console.error('Error parsing options JSON:', err);
-              pollData.options = [];
-            }
-          }
-
-          let myAnswer = null;
-          if (userIdGet) {
-            const userVote = await redis.hgetall(`Poll:${pollIdGet}:user:${userIdGet}`);
-            if (userVote && userVote.selected_option) {
-              myAnswer = userVote.selected_option;
-            }
-          }
-
-          res.json({ poll: pollData, my_answer: myAnswer });
-          break;
-        }
-
-        case 'GET_LEADERBOARD':
-        case 'GET_LEADERBOARD_VIDEOWISE': {
-          const pollIdLeader = data?.poll_id || data?.id || req.body.poll_id || req.body.id;
-          const leaderboardData = await redis.get(`Poll:${pollIdLeader}:final_leaderboard`);
-          if (!leaderboardData) return res.status(404).json({ error: 'Leaderboard not ready' });
-          res.json({ leaderboard: JSON.parse(leaderboardData) });
           break;
         }
 
