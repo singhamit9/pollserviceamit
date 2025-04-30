@@ -8,7 +8,7 @@ const os = require('os');
 const axios = require('axios');
 
 const numCPUs = os.cpus().length;
-const EMQX_HOST = 'MQTT-chat-7c6cdb28f96eeaf6.elb.ap-south-1.amazonaws.com';
+const EMQX_HOST = 'nxtt-emqx-test-chat.videocrypt.in';
 
 if (cluster.isMaster) {
   console.log(`Master process running with PID: ${process.pid}`);
@@ -40,7 +40,7 @@ if (cluster.isMaster) {
   app.get('/poll/health', (req, res) => res.status(200).send('OK'));
 
   app.post('/managePoll', async (req, res) => {
-    const { type, data, course_id, id: userId, setting_node, video_id } = req.body;
+    const { type, data, course_id, id: userId, setting_node, video_id, delay } = req.body;
     if (!type || !video_id) {
       return res.status(400).json({ error: 'Invalid payload structure' });
     }
@@ -70,7 +70,7 @@ if (cluster.isMaster) {
               option_4: data.option_4,
               answer: data.answer,
               created: now,
-              delay: data.delay,
+              delay: delay,
               validity: data.validity,
               valid_till: validTill,
               disable_result: 0,
@@ -112,9 +112,9 @@ if (cluster.isMaster) {
             reconnectPeriod: 1000
           });
           mqttClient.on('connect', () => {
-            mqttClient.publish(setting_node, JSON.stringify(fullPayload), { qos: 2, retain: false }, (err) => {
+            mqttClient.publish(setting_node, JSON.stringify(fullPayload), { qos: 2, retain: true }, (err) => {
               if (err) console.error('❌ Error publishing:', err);
-              console.log('Published:', JSON.stringify(fullPayload));
+              console.log('Published to setting_node:', setting_node);
               mqttClient.end();
             });
           });
