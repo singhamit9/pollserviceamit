@@ -8,7 +8,7 @@ const os = require('os');
 const axios = require('axios');
 
 const numCPUs = os.cpus().length;
-const EMQX_HOST = 'nxtt-emqx-test-chat.videocrypt.in';
+const EMQX_HOST = 'MQTT-chat-7c6cdb28f96eeaf6.elb.ap-south-1.amazonaws.com';
 
 if (cluster.isMaster) {
   console.log(`Master process running with PID: ${process.pid}`);
